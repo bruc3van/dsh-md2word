@@ -43,7 +43,11 @@ test('inline images have bounded decoding and aggregate budgets', async () => {
     const ok = await h.call(source(md));
     assert.equal(ok.isError, false, JSON.stringify(ok));
     assert.deepEqual(ok.value.warnings, []);
-    const limited = await h.call(source(`${md} ${md}`));
+    // One image referenced repeatedly is read, decoded and budgeted once.
+    const repeated = await h.call(source(`${md} ${md}`));
+    assert.equal(repeated.isError, false, JSON.stringify(repeated));
+    const other = await sharp({ create: { width: 2, height: 2, channels: 4, background: '#0000ff' } }).png().toBuffer();
+    const limited = await h.call(source(`${md} ![other](data:image/png;base64,${other.toString('base64')})`));
     assert.equal(limited.error.info.code, 'LIMIT_EXCEEDED');
   } finally { await h.close(); }
 });

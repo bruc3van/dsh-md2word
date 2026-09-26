@@ -1,6 +1,6 @@
 {
   "name": "bruce-md2word",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "面向 AI Agent 的 Markdown 转 Word 工具，提供开箱即用的中文排版、Mermaid 图表转图片和可编辑数学公式，提供Skill、独立 CLI 和 DSH 插件。",
   "type": "module",
   "main": "lib/index.js",
@@ -30,7 +30,7 @@
     "url": "git+https://github.com/bruc3van/bruce-md2word.git"
   },
   "engines": {
-    "node": ">=24 <25"
+    "node": "^24 || ^26"
   },
   "dsh": {
     "bundle": {
@@ -48,12 +48,13 @@
   "dependencies": {
     "@deepseek-ai/schemastery": "3.18.2",
     "bmp-js": "0.1.0",
-    "docx": "9.7.1",
+    "docx": "9.7.2",
     "jsdom": "27.4.0",
     "json5": "2.2.3",
     "jszip": "3.10.2",
     "markdown-it": "14.3.2",
     "markdown-it-footnote": "4.0.0",
+    "saxes": "6.0.0",
     "sharp": "0.35.4",
     "temml": "0.13.5",
     "yaml": "2.9.1"

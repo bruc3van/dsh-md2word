@@ -286,7 +286,9 @@ export function convertHTMLToDocx(html: string, images: Map<string, EmbeddedImag
   try {
     const sections: { landscape: boolean; children: Block[] }[] = [{ landscape: false, children: [] }];
     let children = sections[0].children;
-    for (const node of Array.from(dom.window.document.body.childNodes)) {
+    // Walk siblings rather than body.childNodes: a live body-level NodeList makes
+    // jsdom's window.close() teardown quadratic in the number of top-level blocks.
+    for (let node = dom.window.document.body.firstChild; node; node = node.nextSibling) {
       if (node.nodeType === 1 && (node as Element).hasAttribute('data-orientation')) {
         const next = (node as Element).getAttribute('data-orientation') === 'landscape';
         if (next !== landscape) {

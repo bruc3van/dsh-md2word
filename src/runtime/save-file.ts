@@ -13,6 +13,22 @@ async function checkDirectory(directory: string): Promise<void> {
   if (!info.isDirectory() || info.isSymbolicLink() || await realpath(directory) !== directory) throw new FsError('Output must be a real project directory, not a symbolic link.', 'FS_SANDBOX_DENIED');
 }
 
+/** Exclusive create for filesystems without hard links: never overwrites (false when
+ * the name exists) and on failure removes only the file this call created. Not atomic.
+ */
+export async function writeExclusive(file: string, data: Uint8Array, signal: AbortSignal): Promise<boolean> {
+  let handle;
+  try { handle = await open(file, 'wx', 0o666); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false; throw error; }
+  try {
+    try { await handle.writeFile(data, { signal }); await handle.sync(); } finally { await handle.close(); }
+    return true;
+  } catch (error) {
+    await unlink(file).catch(() => {});
+    throw error;
+  }
+}
+
 export async function saveFile(directory: string, name: string, data: Uint8Array, signal: AbortSignal): Promise<string> {
   outputName(name);
   signal.throwIfAborted();
@@ -20,7 +36,8 @@ export async function saveFile(directory: string, name: string, data: Uint8Array
     try { await mkdir(directory); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
     await checkDirectory(directory);
     const temporary = path.join(directory, `.md2word-${randomUUID()}.tmp`);
-    const file = await open(temporary, 'wx', 0o600);
+    // Ordinary document permissions: the process umask applies, as for any saved file.
+    const file = await open(temporary, 'wx', 0o666);
     try {
       try { await file.writeFile(data, { signal }); await file.sync(); } finally { await file.close(); }
       for (let suffix = 0; suffix < 1000; suffix++) {
@@ -31,7 +48,13 @@ export async function saveFile(directory: string, name: string, data: Uint8Array
           // link publishes the complete file atomically and never overwrites.
           await link(temporary, candidate);
           return candidate;
-        } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === 'EEXIST') continue;
+          if (!['ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EPERM'].includes(code ?? '')) throw error;
+        }
+        // Filesystems without hard links (exFAT, some network shares).
+        if (await writeExclusive(candidate, data, signal)) return candidate;
       }
       throw new FsError('Too many existing files with this export name.', 'FS_IO_ERROR');
     } finally { await unlink(temporary); }

@@ -73,7 +73,6 @@ export async function runCli(ctx: Context, args: WordExportInput, exec: ToolExec
   if (!value || value.protocol !== 1 || typeof value.path !== 'string' || !value.path || typeof value.fileName !== 'string'
     || value.mimeType !== 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     || !Number.isSafeInteger(value.sizeBytes) || value.sizeBytes <= 0 || value.sizeBytes > config.maxOutputBytes
-    || !Array.isArray(value.warnings) || value.warnings.length > config.maxDiagnostics
-    || value.warnings.some(w => !w || typeof w.code !== 'string' || typeof w.message !== 'string' || w.message.length > 300 || !['info', 'degradation'].includes(w.severity) || w.line !== undefined && (!Number.isSafeInteger(w.line) || w.line < 1))) throw new ExportError('CLI returned an invalid export result.', 'CONVERSION_FAILED');
+    || !validDiagnostics(value.warnings, config.maxDiagnostics)) throw new ExportError('CLI returned an invalid export result.', 'CONVERSION_FAILED');
   return { path: value.path, fileName: value.fileName, mimeType: value.mimeType, sizeBytes: value.sizeBytes, warnings: value.warnings };
 }

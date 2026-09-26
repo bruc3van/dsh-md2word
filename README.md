@@ -62,7 +62,7 @@ Skill 是可阅读的 [操作说明](skills/bruce-md2word/SKILL.md)，优先复�
 
 ## 运行环境与依赖
 
-使用 CLI 需要 **Node.js 24（`>=24 <25`）和 npm 或兼容的包管理器**。中文图表需要运行机器安装中文字体。无需安装 Word、LibreOffice、Pandoc、Python、Chromium 或单独的 Mermaid CLI；Word 仅用于打开、编辑或人工检查生成的文档。
+使用 CLI 需要 **Node.js 24 或 26（`^24 || ^26`）和 npm 或兼容的包管理器**。中文图表需要运行机器安装中文字体。无需安装 Word、LibreOffice、Pandoc、Python、Chromium 或单独的 Mermaid CLI；Word 仅用于打开、编辑或人工检查生成的文档。
 
 <details>
 <summary>转换依赖及用途</summary>
@@ -73,9 +73,10 @@ Skill 是可阅读的 [操作说明](skills/bruce-md2word/SKILL.md)，优先复�
 | --- | --- | --- |
 | `markdown-it` | `14.3.2` | 解析 Markdown 结构；关闭原始 HTML 渲染、自动链接识别和 typographer。 |
 | `markdown-it-footnote` | `4.0.0` | 解析命名脚注、多段定义及重复引用；映射为 Word 原生脚注。 |
-| `docx` | `9.7.1` | 生成 Word 文档、样式、表格和原生数学公式。 |
+| `docx` | `9.7.2` | 生成 Word 文档、样式、表格和原生数学公式。 |
 | `temml` | `0.13.5` | 将 LaTeX 解析为 MathML，再由本项目转换为 Word 原生公式。 |
 | `jsdom` | `27.4.0` | 在本地解析 HTML、XML、MathML 和生成的 SVG；不启动浏览器。 |
+| `saxes` | `6.0.0` | 保存前校验生成 DOCX 内各 XML 部件的格式与关系引用。 |
 | `yaml` / `json5` | `2.9.1` / `2.2.3` | 解析 Mermaid 前置配置和初始化配置。 |
 | `sharp` | `0.35.4` | 解码和处理图片，将生成的图表栅格化为 PNG；包含平台相关原生依赖。 |
 | `bmp-js` | `0.1.0` | 解码支持的 BMP 图片。 |
@@ -120,12 +121,12 @@ npx skills add bruc3van/bruce-md2word --skill bruce-md2word
 
 默认安装到当前项目；添加 `-g` 可安装到用户级目录，添加 `-a <agent>` 可指定目标 Agent。安装后按目标 Agent 的方式重新加载技能。
 
-`npx skills` 负责安装 Skill 文件。首次使用时，Agent 会按 Skill 检查 CLI，缺失时安装，版本落后时更新，然后继续导出；用户指定版本或项目锁定版本会被保留。需要 Node.js 24 和相应的命令执行权限。
+`npx skills` 负责安装 Skill 文件。首次使用时，Agent 会按 Skill 检查 CLI，缺失时安装，版本落后时更新，然后继续导出；用户指定版本或项目锁定版本会被保留。需要 Node.js 24 或 26 和相应的命令执行权限。
 
 如果希望提前准备 CLI，也可以手动安装：
 
 ```sh
-npm install -g bruce-md2word@0.6.0
+npm install -g bruce-md2word@0.6.1
 ```
 
 也可以直接让 Agent 帮你完成：
@@ -138,12 +139,12 @@ npm install -g bruce-md2word@0.6.0
 
 独立 CLI 可用于 DSH 之外的环境。给 Agent 的安装与使用指令：
 
-> 请检查 Node.js 是否为 24，然后安装 bruce-md2word@0.6.0 的独立 CLI，将 docs/报告.md 严格导出为 Word。读取命令返回的 JSON，告诉我真实输出路径和警告；失败时说明错误码和原因。
+> 请检查 Node.js 是否为 24 或 26，然后安装 bruce-md2word@0.6.1 的独立 CLI，将 docs/报告.md 严格导出为 Word。读取命令返回的 JSON，告诉我真实输出路径和警告；失败时说明错误码和原因。
 
 对应命令：
 
 ```sh
-npm install -g bruce-md2word@0.6.0
+npm install -g bruce-md2word@0.6.1
 bruce-md2word docs/报告.md --strict -o output/项目报告.docx
 bruce-md2word --help
 ```
@@ -165,16 +166,16 @@ CLI 支持文件输入，也支持以 `-` 从标准输入读取 Markdown；正�
 <details>
 <summary>手动安装命令与环境要求</summary>
 
-当前包要求 Node.js `>=24 <25`、DSH 服务包 `0.1.7-rc.2`、Cordis `~4.0.4`。请在目标 DSH 环境中执行，将 `web` 换成实际 profile，并沿用该环境的 `DSH_HOME`。
+当前包要求 Node.js `^24 || ^26`、DSH 服务包 `0.1.7-rc.2`、Cordis `~4.0.4`。请在目标 DSH 环境中执行，将 `web` 换成实际 profile，并沿用该环境的 `DSH_HOME`。
 
 ```sh
-dsh plugin --profile web add bruce-md2word@0.6.0
+dsh plugin --profile web add bruce-md2word@0.6.1
 ```
 
 如果你的 DSH 通过 `npx` 启动，可使用对应版本的 CLI，例如：
 
 ```sh
-npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add bruce-md2word@0.6.0
+npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add bruce-md2word@0.6.1
 ```
 
 安装后重启对应 profile。默认项目模式需要 DSH 的 `tools` 与 `shell` 服务就绪，才会注册 `word_export`。版本来源见 [npm 包](https://www.npmjs.com/package/bruce-md2word)，服务依赖见 [运行参考](docs/agent-reference.md#环境与工具注册)。
@@ -265,7 +266,7 @@ Mermaid 使用本地轻量渲染器，不覆盖官方全部语法。支持流程
 
 ## 开发与验证
 
-在 Node.js 24 下执行：
+在 Node.js 24 或 26 下执行：
 
 ```sh
 npm ci

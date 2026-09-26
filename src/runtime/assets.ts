@@ -12,8 +12,12 @@ export async function acquireImages(fs: FileSystem, refs: ImageReference[], inpu
   const diagnostics = new Diagnostics(limits.maxDiagnostics);
   const assets: AcquiredImage[] = [];
   let total = 0;
+  // Repeated references read and count one image once; the worker decodes it once too.
+  const acquired = new Map<string, Uint8Array>();
   for (const ref of refs) {
     signal.throwIfAborted();
+    const previous = acquired.get(ref.src);
+    if (previous) { assets.push({ id: ref.id, data: previous }); continue; }
     let data: Uint8Array | undefined;
     const unavailable = (message: string): void => diagnostics.add('IMAGE_UNAVAILABLE', message, 'degradation', ref.line);
     if (/^data:/i.test(ref.src)) {
@@ -43,6 +47,7 @@ export async function acquireImages(fs: FileSystem, refs: ImageReference[], inpu
     }
     total += data.byteLength;
     if (data.byteLength > limits.maxImageBytes || total > limits.maxTotalImageBytes) throw new ExportError('Image bytes exceed the configured limit.', 'LIMIT_EXCEEDED');
+    acquired.set(ref.src, data);
     assets.push({ id: ref.id, data });
   }
   return { assets, warnings: diagnostics.items };

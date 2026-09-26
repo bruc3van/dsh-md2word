@@ -5,6 +5,7 @@ import type { AcquiredImage } from '../core/convert.js';
 import type { Diagnostic } from '../core/diagnostics.js';
 import type { Limits } from '../config.js';
 import { validateArtifact } from './artifact.js';
+import { transferable } from './worker-client.js';
 const port = parentPort!;
 const { markdown, limits } = workerData as { markdown: string; limits: Limits };
 async function run(): Promise<void> {
@@ -14,7 +15,7 @@ async function run(): Promise<void> {
   const acquired = await assets;
   const result = await convert(parsed, acquired.assets, acquired.warnings, limits);
   await validateArtifact(result.data, limits.maxOutputBytes);
-  port.postMessage({ type: 'result', ...result });
+  port.postMessage({ type: 'result', ...result }, transferable([result.data]));
   port.close();
 }
 run().catch((error: unknown) => {

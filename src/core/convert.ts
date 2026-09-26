@@ -17,42 +17,25 @@ export interface AcquiredImage { id: string; data: Uint8Array }
 export async function convert(parsed: ParsedMarkdown, assets: AcquiredImage[], warnings: Diagnostic[], limits: Limits): Promise<{ data: Uint8Array; warnings: Diagnostic[] }> {
   for (const warning of warnings) parsed.diagnostics.add(warning.code, warning.message, warning.severity, warning.line);
   const images = new Map<string, EmbeddedImage>();
+  // Repeated references share one acquired buffer: decode and budget it once.
+  const decoded = new Map<Uint8Array, { image: EmbeddedImage; animated: boolean } | null>();
   let normalizedBytes = 0;
   for (const asset of assets) {
     const ref = parsed.images.find(image => image.id === asset.id);
     if (!ref) throw new ExportError('Unknown image in worker response.', 'CONVERSION_FAILED');
-    try {
-      const input = Buffer.from(asset.data);
-      let data: Buffer;
-      let width: number;
-      let height: number;
-      if (input.subarray(0, 2).toString() === 'BM') {
-        if (input.length < 54 || input.readUInt32LE(14) !== 40 || input.readUInt32LE(30) !== 0 || ![24, 32].includes(input.readUInt16LE(28))) throw new Error('Unsupported BMP encoding');
-        width = input.readInt32LE(18); height = Math.abs(input.readInt32LE(22));
-        checkDimensions(width, height, limits);
-        const row = Math.ceil(width * input.readUInt16LE(28) / 32) * 4;
-        if (input.readUInt32LE(10) + row * height > input.length) throw new Error('Truncated BMP');
-        const decoded = bmp.decode(input);
-        const rgba = Buffer.alloc(decoded.data.length);
-        for (let i = 0; i < rgba.length; i += 4) { rgba[i] = decoded.data[i + 3]; rgba[i + 1] = decoded.data[i + 2]; rgba[i + 2] = decoded.data[i + 1]; rgba[i + 3] = 255; }
-        data = await sharp(rgba, { raw: { width, height, channels: 4 } }).png().toBuffer();
-      } else {
-        const decoder = sharp(input, { failOn: 'warning', limitInputPixels: limits.maxImagePixels });
-        const meta = await sharp(input, { limitInputPixels: false }).metadata();
-        if (!['png', 'jpeg', 'gif'].includes(meta.format ?? '')) throw new Error('Unsupported image format');
-        checkDimensions(meta.width, meta.height, limits);
-        const normalized = await decoder.rotate().png().toBuffer({ resolveWithObject: true });
-        data = normalized.data; width = normalized.info.width; height = normalized.info.height;
-        if ((meta.pages ?? 1) > 1) parsed.diagnostics.add('IMAGE_FIRST_FRAME', 'Only the first frame of an animated image is included.', 'degradation', ref.line);
+    let result = decoded.get(asset.data);
+    if (result === undefined) {
+      try { result = await normalizeImage(asset.data, limits); }
+      catch (error) { if (error instanceof ExportError) throw error; result = null; }
+      decoded.set(asset.data, result);
+      if (result) {
+        normalizedBytes += result.image.data.byteLength;
+        if (normalizedBytes > limits.maxTotalImageBytes) throw new ExportError('Normalized images exceed the aggregate byte limit.', 'LIMIT_EXCEEDED');
       }
-      if (data.byteLength > limits.maxImageBytes) throw new ExportError('Decoded image exceeds the configured byte limit.', 'LIMIT_EXCEEDED');
-      normalizedBytes += data.byteLength;
-      if (normalizedBytes > limits.maxTotalImageBytes) throw new ExportError('Normalized images exceed the aggregate byte limit.', 'LIMIT_EXCEEDED');
-      images.set(asset.id, { data, type: 'png', width, height });
-    } catch (error) {
-      if (error instanceof ExportError) throw error;
-      parsed.diagnostics.add('IMAGE_UNAVAILABLE', 'Unsupported or damaged image; alternative text retained.', 'degradation', ref.line);
     }
+    if (!result) { parsed.diagnostics.add('IMAGE_UNAVAILABLE', 'Unsupported or damaged image; alternative text retained.', 'degradation', ref.line); continue; }
+    if (result.animated) parsed.diagnostics.add('IMAGE_FIRST_FRAME', 'Only the first frame of an animated image is included.', 'degradation', ref.line);
+    images.set(asset.id, result.image);
   }
   let html = parsed.html;
   const diagramBounds = new Map<string, ImageBounds>();
@@ -123,6 +106,34 @@ export async function convert(parsed: ParsedMarkdown, assets: AcquiredImage[], w
   const data = await Packer.toBuffer(document);
   if (data.byteLength > limits.maxOutputBytes) throw new ExportError('DOCX exceeds the configured output limit.', 'LIMIT_EXCEEDED');
   return { data, warnings: parsed.diagnostics.items };
+}
+async function normalizeImage(source: Uint8Array, limits: Limits): Promise<{ image: EmbeddedImage; animated: boolean }> {
+  const input = Buffer.from(source.buffer, source.byteOffset, source.byteLength);
+  let data: Buffer;
+  let width: number;
+  let height: number;
+  let animated = false;
+  if (input.subarray(0, 2).toString() === 'BM') {
+    if (input.length < 54 || input.readUInt32LE(14) !== 40 || input.readUInt32LE(30) !== 0 || ![24, 32].includes(input.readUInt16LE(28))) throw new Error('Unsupported BMP encoding');
+    width = input.readInt32LE(18); height = Math.abs(input.readInt32LE(22));
+    checkDimensions(width, height, limits);
+    const row = Math.ceil(width * input.readUInt16LE(28) / 32) * 4;
+    if (input.readUInt32LE(10) + row * height > input.length) throw new Error('Truncated BMP');
+    const decoded = bmp.decode(input);
+    const rgba = Buffer.alloc(decoded.data.length);
+    for (let i = 0; i < rgba.length; i += 4) { rgba[i] = decoded.data[i + 3]; rgba[i + 1] = decoded.data[i + 2]; rgba[i + 2] = decoded.data[i + 1]; rgba[i + 3] = 255; }
+    data = await sharp(rgba, { raw: { width, height, channels: 4 } }).png().toBuffer();
+  } else {
+    const decoder = sharp(input, { failOn: 'warning', limitInputPixels: limits.maxImagePixels });
+    const meta = await sharp(input, { limitInputPixels: false }).metadata();
+    if (!['png', 'jpeg', 'gif'].includes(meta.format ?? '')) throw new Error('Unsupported image format');
+    checkDimensions(meta.width, meta.height, limits);
+    const normalized = await decoder.rotate().png().toBuffer({ resolveWithObject: true });
+    data = normalized.data; width = normalized.info.width; height = normalized.info.height;
+    animated = (meta.pages ?? 1) > 1;
+  }
+  if (data.byteLength > limits.maxImageBytes) throw new ExportError('Decoded image exceeds the configured byte limit.', 'LIMIT_EXCEEDED');
+  return { image: { data, type: 'png', width, height }, animated };
 }
 function checkDimensions(width: number, height: number, limits: Limits): void {
   if (!(width > 0 && height > 0)) throw new Error('Invalid dimensions');

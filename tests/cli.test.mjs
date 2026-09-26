@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, readdir, mkdir, symlink, realpath, writeFile, access } from 'node:fs/promises';
+import { readFile, readdir, mkdir, symlink, realpath, writeFile, access, stat } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import JSZip from 'jszip';
 import { harness } from './harness.mjs';
-import { saveFile } from '../lib/runtime/save-file.js';
+import { saveFile, writeExclusive } from '../lib/runtime/save-file.js';
 import LocalBash from '@deepseek-ai/dsh-bash-local';
 import LocalPwsh from '@deepseek-ai/dsh-pwsh-local';
 import LocalSubprocess from '@deepseek-ai/dsh-subprocess-local';
@@ -85,6 +85,35 @@ test('CLI refuses symlinked output directories', async () => {
   } finally { await h.close(); }
 });
 
+test('CLI resolves an explicit -o directory alias and publishes umask permissions', async () => {
+  const h = await harness();
+  try {
+    await mkdir(path.join(h.root, 'other'));
+    await symlink(path.join(h.root, 'other'), path.join(h.root, 'alias'), 'junction');
+    const result = await run(h.root, ['-', '-o', path.join('alias', 'x.docx')], '# x');
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    const saved = JSON.parse(result.stdout).path;
+    assert.equal(saved, path.join(await realpath(path.join(h.root, 'other')), 'x.docx'));
+    if (process.platform !== 'win32') assert.equal((await stat(saved)).mode & 0o777, 0o666 & ~process.umask());
+  } finally { await h.close(); }
+});
+
+test('CLI reports a string error code and exit 130 when interrupted', { skip: process.platform === 'win32' }, async () => {
+  const h = await harness();
+  try {
+    const child = spawn(process.execPath, [cli, '-'], { cwd: h.root, stdio: ['pipe', 'pipe', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', data => { stderr += data; });
+    const closed = new Promise(resolve => child.on('close', resolve));
+    // stdin stays open, so the CLI is waiting for input when the signal arrives.
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    child.kill('SIGINT');
+    assert.equal(await closed, 130);
+    assert.equal(JSON.parse(stderr).error.code, 'ABORTED');
+  } finally { await h.close(); }
+});
+
 test('parallel CLI publication keeps unique files and cleans temporary files', async () => {
   const h = await harness();
   try {
@@ -93,6 +122,22 @@ test('parallel CLI publication keeps unique files and cleans temporary files', a
     assert.equal(new Set(results).size, 5);
     assert.deepEqual(await Promise.all(results.map(file => readFile(file, 'utf8'))), ['0', '1', '2', '3', '4']);
     assert.equal((await readdir(dir)).length, 5);
+  } finally { await h.close(); }
+});
+
+test('no-hard-link fallback never removes an existing file and cleans only its own failed write', async () => {
+  const h = await harness();
+  try {
+    const existing = path.join(h.root, 'existing.docx');
+    await writeFile(existing, 'EXISTING');
+    assert.equal(await writeExclusive(existing, Buffer.from('new'), new AbortController().signal), false);
+    assert.equal(await readFile(existing, 'utf8'), 'EXISTING');
+    const failed = path.join(h.root, 'failed.docx');
+    await assert.rejects(writeExclusive(failed, Buffer.from('x'), AbortSignal.abort()), { name: 'AbortError' });
+    await assert.rejects(access(failed), { code: 'ENOENT' });
+    const created = path.join(h.root, 'created.docx');
+    assert.equal(await writeExclusive(created, Buffer.from('ok'), new AbortController().signal), true);
+    assert.equal(await readFile(created, 'utf8'), 'ok');
   } finally { await h.close(); }
 });
 

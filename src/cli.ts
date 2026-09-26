@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
 import path from 'node:path';
-import { mkdir, readFile, realpath } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import { Context } from '@deepseek-ai/cordis';
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local';
 import { resolveConfig, defaults, type Config } from './config.js';
@@ -19,10 +19,11 @@ Existing files are never overwritten; collisions add a numeric suffix.
 Success is reported as JSON on stdout; errors are JSON on stderr.
 --version, -v prints the package version and exits without converting.
 --request reads a versioned plugin request from stdin; it always saves in ./output/.
-Node.js 24 required. No Office, Python or external converter is needed.
+Node.js 24 or 26 required. No Office, Python or external converter is needed.
 `;
 const controller = new AbortController();
-const onSignal = () => controller.abort(new DOMException('Export canceled.', 'AbortError'));
+let signaled = false;
+const onSignal = () => { signaled = true; controller.abort(new DOMException('Export canceled.', 'AbortError')); };
 process.once('SIGINT', onSignal);
 process.once('SIGTERM', onSignal);
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -98,12 +99,12 @@ async function main(): Promise<void> {
     signal.throwIfAborted();
     if (input.strict && result.warnings.some(w => w.severity === 'degradation')) throw new ContentIncompleteError(result.warnings);
     const requestedDir = values.output ? path.dirname(path.resolve(values.output)) : path.resolve('output');
-    // Refuse a redirected final directory; canonical parent aliases (e.g. /tmp)
-    // are fine. Publication checks repeat immediately before the syscall.
-    const parent = await realpath(path.dirname(requestedDir));
-    const directory = path.join(parent, path.basename(requestedDir));
+    // An explicit -o directory is the user's choice, so resolve aliases such as
+    // macOS /tmp. The default ./output (also used by --request) must not be a
+    // redirected directory. Publication checks repeat immediately before the syscall.
+    const explicit = values.output ? await realpath(requestedDir).catch(error => { if (error.code !== 'ENOENT') throw error; }) : undefined;
+    const directory = explicit ?? path.join(await realpath(path.dirname(requestedDir)), path.basename(requestedDir));
     signal.throwIfAborted();
-    await mkdir(directory, { recursive: false }).catch(error => { if (error.code !== 'EEXIST') throw error; });
     const saved = await saveFile(directory, source.fileName, result.data, signal);
     signal.throwIfAborted();
     process.stdout.write(JSON.stringify({ protocol: 1, path: saved, fileName: path.basename(saved), mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', sizeBytes: result.data.byteLength, warnings: result.warnings }) + '\n');
@@ -112,9 +113,11 @@ async function main(): Promise<void> {
 
 try { await main(); }
 catch (cause) {
-  const error = (controller.signal.aborted ? controller.signal.reason : cause) as { code?: string; message?: string };
-  process.stderr.write(JSON.stringify({ protocol: 1, error: { code: error?.code ?? 'CONVERSION_FAILED', message: (error?.message ?? 'Conversion failed.').slice(0, 500), ...(error instanceof ContentIncompleteError ? { diagnostics: error.diagnostics } : {}) } }) + '\n');
-  process.exitCode = controller.signal.aborted ? 130 : 1;
+  const error = (controller.signal.aborted ? controller.signal.reason : cause) as { code?: unknown; name?: string; message?: string };
+  // DOMException exposes a numeric legacy code; the protocol reports string codes only.
+  const code = typeof error?.code === 'string' ? error.code : error?.name === 'AbortError' ? 'ABORTED' : 'CONVERSION_FAILED';
+  process.stderr.write(JSON.stringify({ protocol: 1, error: { code, message: (error?.message ?? 'Conversion failed.').slice(0, 500), ...(error instanceof ContentIncompleteError ? { diagnostics: error.diagnostics } : {}) } }) + '\n');
+  process.exitCode = signaled ? 130 : 1;
 } finally {
   clearTimeout(timer);
   process.removeListener('SIGINT', onSignal);
